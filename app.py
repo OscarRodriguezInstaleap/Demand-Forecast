@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from prophet import Prophet
+from prophet.plot import plot_plotly
 
 st.set_page_config(page_title="Forecast App", layout="wide")
 
@@ -66,6 +68,35 @@ if archivo is not None:
                                 labels={'hora': 'Hora del día', 'items': 'Items'},
                                 title="Evolución de ítems por hora")
             st.plotly_chart(fig_items, use_container_width=True)
+
+            # Forecast
+            st.subheader("🔮 Forecast de Demanda")
+            dias_prediccion = st.number_input("¿Cuántos días quieres predecir? (1 a 31)", min_value=1, max_value=31, value=7)
+
+            df_pred = df_tienda.groupby('fecha').agg({
+                'pedidos': 'sum',
+                'items': 'sum'
+            }).reset_index()
+
+            # Forecast pedidos
+            st.markdown("#### 📈 Predicción de Pedidos Totales")
+            df_pedidos = df_pred[['fecha', 'pedidos']].rename(columns={'fecha': 'ds', 'pedidos': 'y'})
+            model_pedidos = Prophet()
+            model_pedidos.fit(df_pedidos)
+            future_pedidos = model_pedidos.make_future_dataframe(periods=dias_prediccion)
+            forecast_pedidos = model_pedidos.predict(future_pedidos)
+            fig1 = plot_plotly(model_pedidos, forecast_pedidos)
+            st.plotly_chart(fig1, use_container_width=True)
+
+            # Forecast items
+            st.markdown("#### 📈 Predicción de Ítems Totales")
+            df_items = df_pred[['fecha', 'items']].rename(columns={'fecha': 'ds', 'items': 'y'})
+            model_items = Prophet()
+            model_items.fit(df_items)
+            future_items = model_items.make_future_dataframe(periods=dias_prediccion)
+            forecast_items = model_items.predict(future_items)
+            fig2 = plot_plotly(model_items, forecast_items)
+            st.plotly_chart(fig2, use_container_width=True)
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
