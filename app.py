@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 from prophet import Prophet
 from prophet.plot import plot_plotly
 
@@ -55,47 +56,35 @@ if archivo is not None:
 
             df_tienda = agrupado[agrupado['Tienda'] == tienda_seleccionada]
 
-            # Evolución de pedidos por hora (nuevo diseño)
-            st.subheader(f"📊 Evolución de pedidos por hora en {tienda_seleccionada}")
-            fig_pedidos = go.Figure()
-            for fecha in sorted(df_tienda['fecha'].unique()):
-                df_fecha = df_tienda[df_tienda['fecha'] == fecha]
-                fig_pedidos.add_trace(go.Scatter(
-                    x=df_fecha['hora'],
-                    y=df_fecha['pedidos'],
-                    mode='lines',
-                    name=str(fecha),
-                    line=dict(width=2)
-                ))
-            fig_pedidos.update_layout(
-                xaxis_title='Hora del día',
-                yaxis_title='Pedidos',
-                showlegend=True,
-                template='simple_white',
-                height=400
+            # Heatmap de pedidos por hora/día
+            st.subheader(f"🟧 Heatmap de pedidos por hora en {tienda_seleccionada}")
+            fig_heatmap_pedidos = px.density_heatmap(
+                df_tienda,
+                x='hora',
+                y='fecha',
+                z='pedidos',
+                histfunc='sum',
+                nbinsx=24,
+                labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'pedidos': 'Cantidad de pedidos'},
+                color_continuous_scale='Blues'
             )
-            st.plotly_chart(fig_pedidos, use_container_width=True)
+            fig_heatmap_pedidos.update_layout(height=400, template='simple_white')
+            st.plotly_chart(fig_heatmap_pedidos, use_container_width=True)
 
-            # Evolución de items por hora (nuevo diseño)
-            st.subheader(f"📦 Evolución de ítems por hora en {tienda_seleccionada}")
-            fig_items = go.Figure()
-            for fecha in sorted(df_tienda['fecha'].unique()):
-                df_fecha = df_tienda[df_tienda['fecha'] == fecha]
-                fig_items.add_trace(go.Scatter(
-                    x=df_fecha['hora'],
-                    y=df_fecha['items'],
-                    mode='lines',
-                    name=str(fecha),
-                    line=dict(width=2)
-                ))
-            fig_items.update_layout(
-                xaxis_title='Hora del día',
-                yaxis_title='Ítems',
-                showlegend=True,
-                template='simple_white',
-                height=400
+            # Heatmap de ítems por hora/día
+            st.subheader(f"🟦 Heatmap de ítems por hora en {tienda_seleccionada}")
+            fig_heatmap_items = px.density_heatmap(
+                df_tienda,
+                x='hora',
+                y='fecha',
+                z='items',
+                histfunc='sum',
+                nbinsx=24,
+                labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'items': 'Cantidad de ítems'},
+                color_continuous_scale='Greens'
             )
-            st.plotly_chart(fig_items, use_container_width=True)
+            fig_heatmap_items.update_layout(height=400, template='simple_white')
+            st.plotly_chart(fig_heatmap_items, use_container_width=True)
 
             # Forecast
             st.subheader("🔮 Forecast de Demanda")
@@ -130,3 +119,4 @@ if archivo is not None:
         st.error(f"Error al procesar el archivo: {e}")
 else:
     st.info("⬅️ Por favor carga un archivo CSV para comenzar.")
+
