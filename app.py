@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 from prophet import Prophet
 from prophet.plot import plot_plotly
 
@@ -55,18 +55,46 @@ if archivo is not None:
 
             df_tienda = agrupado[agrupado['Tienda'] == tienda_seleccionada]
 
-            # Mostrar gráfico de pedidos por hora
-            st.subheader(f"📊 Pedidos por hora en {tienda_seleccionada}")
-            fig_pedidos = px.line(df_tienda, x='hora', y='pedidos', color=df_tienda['fecha'].astype(str),
-                                  labels={'hora': 'Hora del día', 'pedidos': 'Pedidos'},
-                                  title="Evolución de pedidos por hora")
+            # Evolución de pedidos por hora (nuevo diseño)
+            st.subheader(f"📊 Evolución de pedidos por hora en {tienda_seleccionada}")
+            fig_pedidos = go.Figure()
+            for fecha in sorted(df_tienda['fecha'].unique()):
+                df_fecha = df_tienda[df_tienda['fecha'] == fecha]
+                fig_pedidos.add_trace(go.Scatter(
+                    x=df_fecha['hora'],
+                    y=df_fecha['pedidos'],
+                    mode='lines',
+                    name=str(fecha),
+                    line=dict(width=2)
+                ))
+            fig_pedidos.update_layout(
+                xaxis_title='Hora del día',
+                yaxis_title='Pedidos',
+                showlegend=True,
+                template='simple_white',
+                height=400
+            )
             st.plotly_chart(fig_pedidos, use_container_width=True)
 
-            # Mostrar gráfico de items por hora
-            st.subheader(f"📦 Ítems por hora en {tienda_seleccionada}")
-            fig_items = px.line(df_tienda, x='hora', y='items', color=df_tienda['fecha'].astype(str),
-                                labels={'hora': 'Hora del día', 'items': 'Items'},
-                                title="Evolución de ítems por hora")
+            # Evolución de items por hora (nuevo diseño)
+            st.subheader(f"📦 Evolución de ítems por hora en {tienda_seleccionada}")
+            fig_items = go.Figure()
+            for fecha in sorted(df_tienda['fecha'].unique()):
+                df_fecha = df_tienda[df_tienda['fecha'] == fecha]
+                fig_items.add_trace(go.Scatter(
+                    x=df_fecha['hora'],
+                    y=df_fecha['items'],
+                    mode='lines',
+                    name=str(fecha),
+                    line=dict(width=2)
+                ))
+            fig_items.update_layout(
+                xaxis_title='Hora del día',
+                yaxis_title='Ítems',
+                showlegend=True,
+                template='simple_white',
+                height=400
+            )
             st.plotly_chart(fig_items, use_container_width=True)
 
             # Forecast
