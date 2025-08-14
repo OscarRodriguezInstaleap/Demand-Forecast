@@ -95,19 +95,21 @@ if archivo is not None:
             future_pedidos = model_pedidos.make_future_dataframe(periods=dias_prediccion)
             forecast_pedidos = model_pedidos.predict(future_pedidos)
             fig1 = plot_plotly(model_pedidos, forecast_pedidos)
-            st.plotly_chart(fig1, use_container_width=True)
+
+st.plotly_chart(fig1, use_container_width=True)
 
 st.markdown("##### Detalle numérico de la predicción de pedidos")
 st.dataframe(
     forecast_pedidos[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-    .tail(dias_prediccion)
-    .rename(columns={
-        'ds': 'Fecha',
-        'yhat': 'Predicción',
-        'yhat_lower': 'Límite Inferior',
-        'yhat_upper': 'Límite Superior'
-    })
+        .tail(dias_prediccion)
+        .rename(columns={
+            'ds': 'Fecha',
+            'yhat': 'Predicción',
+            'yhat_lower': 'Límite Inferior',
+            'yhat_upper': 'Límite Superior'
+        })
 )
+
 
             st.markdown("#### 📈 Predicción de Ítems Totales")
             df_items = df_pred[['fecha', 'items']].rename(columns={'fecha': 'ds', 'items': 'y'})
