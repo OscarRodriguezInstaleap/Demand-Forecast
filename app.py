@@ -388,8 +388,8 @@ if archivo is not None:
                             pdf.cell(0, 8, 'No hay datos de delivery.', ln=1)
 
                     # Entrega del archivo
-                    out = pdf.output(dest='S')
-pdf_bytes = bytes(out) if isinstance(out, bytearray) else out
+                                        out = pdf.output(dest='S')
+                    pdf_bytes = bytes(out) if isinstance(out, bytearray) else out
                     file_name = f"reporte_{tienda_seleccionada}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
                     st.success('Reporte PDF generado.')
                     st.download_button('Descargar reporte PDF', data=pdf_bytes, file_name=file_name, mime='application/pdf')
@@ -398,4 +398,3 @@ pdf_bytes = bytes(out) if isinstance(out, bytearray) else out
         st.error(f"Error al procesar el archivo: {e}")
 else:
     st.info("⬅️ Por favor carga un archivo CSV para comenzar.")
-
