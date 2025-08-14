@@ -2,7 +2,6 @@
 
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 import plotly.express as px
 from prophet import Prophet
 from prophet.plot import plot_plotly
@@ -49,7 +48,7 @@ if archivo is not None:
             tienda_seleccionada = st.selectbox("Selecciona una tienda para visualizar:", tiendas)
             df_tienda = agrupado[agrupado['Tienda'] == tienda_seleccionada]
 
-            # === BLOQUE 2: Visualización histórica (solo en Vista completa o experimental) ===
+            # === BLOQUE 2: Visualización histórica ===
             if modo in ["Vista completa", "Vista experimental"]:
                 st.subheader(f"🟧 Heatmap de pedidos por hora en {tienda_seleccionada}")
                 fig_heatmap_pedidos = px.density_heatmap(
@@ -79,52 +78,58 @@ if archivo is not None:
                 fig_heatmap_items.update_layout(height=400, template='simple_white')
                 st.plotly_chart(fig_heatmap_items, use_container_width=True)
 
-# === BLOQUE 3: Forecast de demanda (siempre visible en los tres modos) ===
-st.subheader("🔮 Forecast de Demanda")
-dias_prediccion = st.number_input("¿Cuántos días quieres predecir? (1 a 31)", min_value=1, max_value=31, value=7)
+            # === BLOQUE 3: Forecast de demanda ===
+            st.subheader("🔮 Forecast de Demanda")
+            dias_prediccion = st.number_input("¿Cuántos días quieres predecir? (1 a 31)", min_value=1, max_value=31, value=7)
 
-df_pred = df_tienda.groupby('fecha').agg({
-    'pedidos': 'sum',
-    'items': 'sum'
-}).reset_index()
+            df_pred = df_tienda.groupby('fecha').agg({
+                'pedidos': 'sum',
+                'items': 'sum'
+            }).reset_index()
 
-# Forecast pedidos
-st.markdown("#### 📈 Predicción de Pedidos Totales")
-df_pedidos = df_pred[['fecha', 'pedidos']].rename(columns={'fecha': 'ds', 'pedidos': 'y'})
-model_pedidos = Prophet()
-model_pedidos.fit(df_pedidos)
-future_pedidos = model_pedidos.make_future_dataframe(periods=dias_prediccion)
-forecast_pedidos = model_pedidos.predict(future_pedidos)
-fig1 = plot_plotly(model_pedidos, forecast_pedidos)
-st.plotly_chart(fig1, use_container_width=True)
+            # Forecast pedidos
+            st.markdown("#### 📈 Predicción de Pedidos Totales")
+            df_pedidos = df_pred[['fecha', 'pedidos']].rename(columns={'fecha': 'ds', 'pedidos': 'y'})
+            model_pedidos = Prophet()
+            model_pedidos.fit(df_pedidos)
+            future_pedidos = model_pedidos.make_future_dataframe(periods=dias_prediccion)
+            forecast_pedidos = model_pedidos.predict(future_pedidos)
+            fig1 = plot_plotly(model_pedidos, forecast_pedidos)
+            st.plotly_chart(fig1, use_container_width=True)
 
-# Tabla detallada de predicción de pedidos
-st.markdown("##### Detalle numérico de la predicción de pedidos")
-st.dataframe(
-    forecast_pedidos[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-    .tail(dias_prediccion)
-    .rename(columns={
-        'ds': 'Fecha',
-        'yhat': 'Predicción',
-        'yhat_lower': 'Límite Inferior',
-        'yhat_upper': 'Límite Superior'
-    })
-)
+            st.markdown("##### Detalle numérico de la predicción de pedidos")
+            st.dataframe(
+                forecast_pedidos[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
+                .tail(dias_prediccion)
+                .rename(columns={
+                    'ds': 'Fecha',
+                    'yhat': 'Predicción',
+                    'yhat_lower': 'Límite Inferior',
+                    'yhat_upper': 'Límite Superior'
+                })
+            )
 
-# Forecast items
-st.markdown("#### 📈 Predicción de Ítems Totales")
-df_items = df_pred[['fecha', 'items']].rename(columns={'fecha': 'ds', 'items': 'y'})
-model_items = Prophet()
-model_items.fit(df_items)
-future_items = model_items.make_future_dataframe(periods=dias_prediccion)
-forecast_items = model_items.predict(future_items)
-fig2 = plot_plotly(model_items, forecast_items)
-st.plotly_chart(fig2, use_container_width=True)
+            # Forecast items
+            st.markdown("#### 📈 Predicción de Ítems Totales")
+            df_items = df_pred[['fecha', 'items']].rename(columns={'fecha': 'ds', 'items': 'y'})
+            model_items = Prophet()
+            model_items.fit(df_items)
+            future_items = model_items.make_future_dataframe(periods=dias_prediccion)
+            forecast_items = model_items.predict(future_items)
+            fig2 = plot_plotly(model_items, forecast_items)
+            st.plotly_chart(fig2, use_container_width=True)
 
-# Tabla detallada de predicción de ítems
-st.markdown("##### Detalle numérico de la predicción de ítems")
-st.dataframe(
-
+            st.markdown("##### Detalle numérico de la predicción de ítems")
+            st.dataframe(
+                forecast_items[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
+                .tail(dias_prediccion)
+                .rename(columns={
+                    'ds': 'Fecha',
+                    'yhat': 'Predicción',
+                    'yhat_lower': 'Límite Inferior',
+                    'yhat_upper': 'Límite Superior'
+                })
+            )
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
