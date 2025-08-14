@@ -1,4 +1,4 @@
-# Versión 0.7 - Forecast con fechas especiales incluido - 2025-08-14
+# Versión 0.8 - Añade BLOQUE 4 (Productividad) y BLOQUE 6 (Fechas especiales) - 2025-08-14
 
 import streamlit as st
 import pandas as pd
@@ -26,6 +26,7 @@ if archivo is not None:
         if not all(col in df.columns for col in columnas_necesarias):
             st.error(f"❌ El archivo debe contener las siguientes columnas: {columnas_necesarias}")
         else:
+            # Filtro y estandarización
             df = df[df['estado'] == 'FINISHED'].copy()
             df['slot_from'] = pd.to_datetime(df['slot_from'], errors='coerce')
             df = df.dropna(subset=['slot_from'])
@@ -34,6 +35,7 @@ if archivo is not None:
             df['items'] = pd.to_numeric(df['items'], errors='coerce')
             df = df.dropna(subset=['items'])
 
+            # Base por tienda/fecha/hora
             agrupado = (
                 df.groupby(['Tienda', 'fecha', 'hora'])
                 .agg(pedidos=('numero_pedido', 'nunique'), items=('items', 'sum'))
@@ -43,6 +45,7 @@ if archivo is not None:
             st.subheader("🎯 Datos procesados por Tienda / Día / Hora")
             st.dataframe(agrupado)
 
+            # Selector de tienda
             tiendas = agrupado['Tienda'].unique().tolist()
             tienda_seleccionada = st.selectbox("Selecciona una tienda para visualizar:", tiendas)
             df_tienda = agrupado[agrupado['Tienda'] == tienda_seleccionada]
@@ -51,8 +54,7 @@ if archivo is not None:
             if modo in ["Vista completa", "Vista experimental"]:
                 st.subheader(f"🟧 Heatmap de pedidos por hora en {tienda_seleccionada}")
                 fig_heatmap_pedidos = px.density_heatmap(
-                    df_tienda, x='hora', y='fecha', z='pedidos', histfunc='sum',
-                    nbinsx=24,
+                    df_tienda, x='hora', y='fecha', z='pedidos', histfunc='sum', nbinsx=24,
                     labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'pedidos': 'Cantidad de pedidos'},
                     color_continuous_scale='Blues'
                 )
@@ -61,13 +63,98 @@ if archivo is not None:
 
                 st.subheader(f"🟦 Heatmap de ítems por hora en {tienda_seleccionada}")
                 fig_heatmap_items = px.density_heatmap(
-                    df_tienda, x='hora', y='fecha', z='items', histfunc='sum',
-                    nbinsx=24,
+                    df_tienda, x='hora', y='fecha', z='items', histfunc='sum', nbinsx=24,
                     labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'items': 'Cantidad de ítems'},
                     color_continuous_scale='Greens'
                 )
                 fig_heatmap_items.update_layout(height=400, template='simple_white')
                 st.plotly_chart(fig_heatmap_items, use_container_width=True)
+
+            # === BLOQUE 4: Métricas de productividad por tienda (Picking y Delivery) ===
+            if modo in ["Vista completa", "Vista experimental"]:
+                st.subheader("⚙️ Métricas de productividad por tienda")
+                # Trabajamos desde la tabla original filtrando la tienda seleccionada
+                df_store = df[df['Tienda'] == tienda_seleccionada].copy()
+
+                # Convertir timestamps relevantes a datetime
+                time_cols = [
+                    'actual_inicio_picking', 'actual_fin_picking',
+                    'actual_inicio_delivery', 'actual_fin_delivery'
+                ]
+                for c in time_cols:
+                    if c in df_store.columns:
+                        df_store[c] = pd.to_datetime(df_store[c], errors='coerce')
+
+                # --- Picking: consolidar a nivel de orden x picker ---
+                if {'picker'}.issubset(df_store.columns):
+                    pick_base = (
+                        df_store.dropna(subset=['picker'])
+                        .groupby(['numero_pedido', 'picker'], as_index=False)
+                        .agg(
+                            items=('items', 'max'),
+                            pick_start=('actual_inicio_picking', 'min'),
+                            pick_end=('actual_fin_picking', 'max')
+                        )
+                    )
+                    pick_base['min_picking'] = (pick_base['pick_end'] - pick_base['pick_start']).dt.total_seconds() / 60.0
+                    pick_base = pick_base.dropna(subset=['min_picking'])
+                    pick_base = pick_base[pick_base['min_picking'] > 0]
+
+                    prod_picker = (
+                        pick_base.groupby('picker')
+                        .agg(
+                            ordenes=('numero_pedido', 'nunique'),
+                            items_totales=('items', 'sum'),
+                            min_totales=('min_picking', 'sum'),
+                            min_promedio_por_orden=('min_picking', 'mean')
+                        )
+                        .reset_index()
+                    )
+                    prod_picker['horas_totales'] = prod_picker['min_totales'] / 60.0
+                    prod_picker['items_por_hora'] = prod_picker['items_totales'] / prod_picker['horas_totales']
+                    prod_picker['ordenes_por_hora'] = prod_picker['ordenes'] / prod_picker['horas_totales']
+
+                    cols_picker = ['picker', 'ordenes', 'items_totales', 'horas_totales', 'items_por_hora', 'ordenes_por_hora', 'min_promedio_por_orden']
+                    prod_picker = prod_picker[cols_picker].round({'horas_totales': 2, 'items_por_hora': 2, 'ordenes_por_hora': 2, 'min_promedio_por_orden': 1})
+
+                    st.markdown("##### 👷‍♂️ Picking — productividad por picker")
+                    st.dataframe(prod_picker.sort_values('items_por_hora', ascending=False))
+                else:
+                    st.info("No se encontraron datos de 'picker' en el archivo para calcular productividad de picking.")
+
+                # --- Delivery: consolidar a nivel de orden x driver ---
+                if {'driver'}.issubset(df_store.columns):
+                    deliv_base = (
+                        df_store.dropna(subset=['driver'])
+                        .groupby(['numero_pedido', 'driver'], as_index=False)
+                        .agg(
+                            deliv_start=('actual_inicio_delivery', 'min'),
+                            deliv_end=('actual_fin_delivery', 'max')
+                        )
+                    )
+                    deliv_base['min_delivery'] = (deliv_base['deliv_end'] - deliv_base['deliv_start']).dt.total_seconds() / 60.0
+                    deliv_base = deliv_base.dropna(subset=['min_delivery'])
+                    deliv_base = deliv_base[deliv_base['min_delivery'] > 0]
+
+                    prod_driver = (
+                        deliv_base.groupby('driver')
+                        .agg(
+                            ordenes=('numero_pedido', 'nunique'),
+                            min_totales=('min_delivery', 'sum'),
+                            min_promedio_por_orden=('min_delivery', 'mean')
+                        )
+                        .reset_index()
+                    )
+                    prod_driver['horas_totales'] = prod_driver['min_totales'] / 60.0
+                    prod_driver['ordenes_por_hora'] = prod_driver['ordenes'] / prod_driver['horas_totales']
+
+                    cols_driver = ['driver', 'ordenes', 'horas_totales', 'ordenes_por_hora', 'min_promedio_por_orden']
+                    prod_driver = prod_driver[cols_driver].round({'horas_totales': 2, 'ordenes_por_hora': 2, 'min_promedio_por_orden': 1})
+
+                    st.markdown("##### 🚚 Delivery — productividad por driver")
+                    st.dataframe(prod_driver.sort_values('ordenes_por_hora', ascending=False))
+                else:
+                    st.info("No se encontraron datos de 'driver' en el archivo para calcular productividad de delivery.")
 
             # === BLOQUE 6: Ajuste por fechas especiales en forecast ===
             st.sidebar.markdown("### ⚡ Fechas especiales")
