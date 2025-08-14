@@ -285,7 +285,7 @@ if archivo is not None:
                         pdf.cell(0, 8, f'Tienda: {tienda_seleccionada}', ln=1)
                         ran = f'Rango historico: {fecha_min.date()} a {fecha_max.date()}'
                         pdf.cell(0, 8, ran, ln=1)
-                        pdf.cell(0, 8, f'Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}', ln=1)
+                        pdf.cell(0, 8, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=1)
 
                     # Heatmaps
                     if inc_heatmaps:
@@ -388,7 +388,8 @@ if archivo is not None:
                             pdf.cell(0, 8, 'No hay datos de delivery.', ln=1)
 
                     # Entrega del archivo
-                    pdf_bytes = pdf.output(dest='S').encode('latin-1')
+                    out = pdf.output(dest='S')
+pdf_bytes = bytes(out) if isinstance(out, bytearray) else out
                     file_name = f"reporte_{tienda_seleccionada}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
                     st.success('Reporte PDF generado.')
                     st.download_button('Descargar reporte PDF', data=pdf_bytes, file_name=file_name, mime='application/pdf')
@@ -397,3 +398,4 @@ if archivo is not None:
         st.error(f"Error al procesar el archivo: {e}")
 else:
     st.info("⬅️ Por favor carga un archivo CSV para comenzar.")
+
