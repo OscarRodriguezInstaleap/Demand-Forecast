@@ -3,4 +3,4 @@ pandas
 plotly
 Prophet
 fpdf2
-kaleido
+matplotlib
