@@ -1,10 +1,13 @@
-# Versión 0.8 - Añade BLOQUE 4 (Productividad) y BLOQUE 6 (Fechas especiales) - 2025-08-14
+# Versión 0.9 - Añade BLOQUE 5 (Reporte PDF), BLOQUE 4 (Productividad) y BLOQUE 6 (Fechas especiales) - 2025-08-14
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from prophet import Prophet
 from prophet.plot import plot_plotly
+import plotly.io as pio
+from datetime import datetime
+import tempfile
 
 st.set_page_config(page_title="Forecast App", layout="wide")
 st.title("📦 Forecast de Demanda por Tienda - Instaleap")
@@ -50,7 +53,13 @@ if archivo is not None:
             tienda_seleccionada = st.selectbox("Selecciona una tienda para visualizar:", tiendas)
             df_tienda = agrupado[agrupado['Tienda'] == tienda_seleccionada]
 
+            # Guardar rango de fechas para reportes
+            fecha_min = pd.to_datetime(df_tienda['fecha']).min()
+            fecha_max = pd.to_datetime(df_tienda['fecha']).max()
+
             # === BLOQUE 2: Visualización histórica ===
+            fig_heatmap_pedidos = None
+            fig_heatmap_items = None
             if modo in ["Vista completa", "Vista experimental"]:
                 st.subheader(f"🟧 Heatmap de pedidos por hora en {tienda_seleccionada}")
                 fig_heatmap_pedidos = px.density_heatmap(
@@ -61,22 +70,23 @@ if archivo is not None:
                 fig_heatmap_pedidos.update_layout(height=400, template='simple_white')
                 st.plotly_chart(fig_heatmap_pedidos, use_container_width=True)
 
-                st.subheader(f"🟦 Heatmap de ítems por hora en {tienda_seleccionada}")
+                st.subheader(f"🟦 Heatmap de items por hora en {tienda_seleccionada}")
                 fig_heatmap_items = px.density_heatmap(
                     df_tienda, x='hora', y='fecha', z='items', histfunc='sum', nbinsx=24,
-                    labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'items': 'Cantidad de ítems'},
+                    labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'items': 'Cantidad de items'},
                     color_continuous_scale='Greens'
                 )
                 fig_heatmap_items.update_layout(height=400, template='simple_white')
                 st.plotly_chart(fig_heatmap_items, use_container_width=True)
 
             # === BLOQUE 4: Métricas de productividad por tienda (Picking y Delivery) ===
+            prod_picker = None
+            prod_driver = None
             if modo in ["Vista completa", "Vista experimental"]:
                 st.subheader("⚙️ Métricas de productividad por tienda")
-                # Trabajamos desde la tabla original filtrando la tienda seleccionada
                 df_store = df[df['Tienda'] == tienda_seleccionada].copy()
 
-                # Convertir timestamps relevantes a datetime
+                # Convertir timestamps relevantes a datetime si existen
                 time_cols = [
                     'actual_inicio_picking', 'actual_fin_picking',
                     'actual_inicio_delivery', 'actual_fin_delivery'
@@ -85,8 +95,8 @@ if archivo is not None:
                     if c in df_store.columns:
                         df_store[c] = pd.to_datetime(df_store[c], errors='coerce')
 
-                # --- Picking: consolidar a nivel de orden x picker ---
-                if {'picker'}.issubset(df_store.columns):
+                # --- Picking
+                if 'picker' in df_store.columns:
                     pick_base = (
                         df_store.dropna(subset=['picker'])
                         .groupby(['numero_pedido', 'picker'], as_index=False)
@@ -117,13 +127,13 @@ if archivo is not None:
                     cols_picker = ['picker', 'ordenes', 'items_totales', 'horas_totales', 'items_por_hora', 'ordenes_por_hora', 'min_promedio_por_orden']
                     prod_picker = prod_picker[cols_picker].round({'horas_totales': 2, 'items_por_hora': 2, 'ordenes_por_hora': 2, 'min_promedio_por_orden': 1})
 
-                    st.markdown("##### 👷‍♂️ Picking — productividad por picker")
+                    st.markdown("##### Picking — productividad por picker")
                     st.dataframe(prod_picker.sort_values('items_por_hora', ascending=False))
                 else:
                     st.info("No se encontraron datos de 'picker' en el archivo para calcular productividad de picking.")
 
-                # --- Delivery: consolidar a nivel de orden x driver ---
-                if {'driver'}.issubset(df_store.columns):
+                # --- Delivery
+                if 'driver' in df_store.columns:
                     deliv_base = (
                         df_store.dropna(subset=['driver'])
                         .groupby(['numero_pedido', 'driver'], as_index=False)
@@ -151,7 +161,7 @@ if archivo is not None:
                     cols_driver = ['driver', 'ordenes', 'horas_totales', 'ordenes_por_hora', 'min_promedio_por_orden']
                     prod_driver = prod_driver[cols_driver].round({'horas_totales': 2, 'ordenes_por_hora': 2, 'min_promedio_por_orden': 1})
 
-                    st.markdown("##### 🚚 Delivery — productividad por driver")
+                    st.markdown("##### Delivery — productividad por driver")
                     st.dataframe(prod_driver.sort_values('ordenes_por_hora', ascending=False))
                 else:
                     st.info("No se encontraron datos de 'driver' en el archivo para calcular productividad de delivery.")
@@ -189,55 +199,195 @@ if archivo is not None:
             model_pedidos.fit(df_pedidos)
             future_pedidos = model_pedidos.make_future_dataframe(periods=dias_prediccion)
             forecast_pedidos = model_pedidos.predict(future_pedidos)
-
             if ajuste_fechas:
                 mask = (forecast_pedidos['ds'] >= ajuste_fechas['inicio']) & (forecast_pedidos['ds'] <= ajuste_fechas['fin'])
                 forecast_pedidos.loc[mask, ['yhat', 'yhat_lower', 'yhat_upper']] *= (1 + ajuste_fechas['incremento'])
-
             fig1 = plot_plotly(model_pedidos, forecast_pedidos)
             st.plotly_chart(fig1, use_container_width=True)
-
             st.markdown("##### Detalle numérico de la predicción de pedidos")
-            st.dataframe(
-                forecast_pedidos[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-                .tail(dias_prediccion)
-                .rename(columns={
-                    'ds': 'Fecha',
-                    'yhat': 'Predicción',
-                    'yhat_lower': 'Límite Inferior',
-                    'yhat_upper': 'Límite Superior'
-                })
-            )
+            tabla_ped = forecast_pedidos[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(dias_prediccion).rename(columns={'ds': 'Fecha','yhat': 'Predicción','yhat_lower': 'Límite Inferior','yhat_upper': 'Límite Superior'})
+            st.dataframe(tabla_ped)
 
             # Forecast items
-            st.markdown("#### 📈 Predicción de Ítems Totales")
+            st.markdown("#### 📈 Predicción de Items Totales")
             df_items = df_pred[['fecha', 'items']].rename(columns={'fecha': 'ds', 'items': 'y'})
             model_items = Prophet()
             model_items.fit(df_items)
             future_items = model_items.make_future_dataframe(periods=dias_prediccion)
             forecast_items = model_items.predict(future_items)
-
             if ajuste_fechas:
                 mask = (forecast_items['ds'] >= ajuste_fechas['inicio']) & (forecast_items['ds'] <= ajuste_fechas['fin'])
                 forecast_items.loc[mask, ['yhat', 'yhat_lower', 'yhat_upper']] *= (1 + ajuste_fechas['incremento'])
-
             fig2 = plot_plotly(model_items, forecast_items)
             st.plotly_chart(fig2, use_container_width=True)
+            tabla_items = forecast_items[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(dias_prediccion).rename(columns={'ds': 'Fecha','yhat': 'Predicción','yhat_lower': 'Límite Inferior','yhat_upper': 'Límite Superior'})
+            st.dataframe(tabla_items)
 
-            st.markdown("##### Detalle numérico de la predicción de ítems")
-            st.dataframe(
-                forecast_items[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-                .tail(dias_prediccion)
-                .rename(columns={
-                    'ds': 'Fecha',
-                    'yhat': 'Predicción',
-                    'yhat_lower': 'Límite Inferior',
-                    'yhat_upper': 'Límite Superior'
-                })
-            )
+            # === BLOQUE 5: Exportación de reporte PDF ===
+            st.sidebar.markdown("### 📄 Reporte PDF")
+            inc_portada = st.sidebar.checkbox("Incluir portada (tienda / rango de fechas)", True)
+            inc_heatmaps = st.sidebar.checkbox("Incluir heatmaps", True)
+            inc_forecast = st.sidebar.checkbox("Incluir resumen de forecast", True)
+            inc_productividad = st.sidebar.checkbox("Incluir tablas de productividad", True)
+
+            if st.sidebar.button("Generar PDF"):
+                try:
+                    from fpdf import FPDF  # requiere paquete fpdf2
+                except Exception as e:
+                    st.error("Para exportar PDF, agrega 'fpdf2' a requirements.txt e intenta de nuevo.")
+                else:
+                    # Helpers: exportar figuras a PNG usando kaleido
+                    def fig_to_png_path(fig):
+                        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                        fig.update_layout(width=900, height=400)
+                        png_bytes = fig.to_image(format="png", scale=2)
+                        with open(tmp.name, 'wb') as f:
+                            f.write(png_bytes)
+                        return tmp.name
+
+                    # Construcción del PDF
+                    pdf = FPDF(orientation="P", unit="mm", format="A4")
+                    pdf.set_auto_page_break(auto=True, margin=12)
+
+                    # Portada
+                    if inc_portada:
+                        pdf.add_page()
+                        pdf.set_font("Helvetica", "B", 18)
+                        pdf.cell(0, 12, "Reporte de Demanda - Instaleap", ln=1)
+                        pdf.set_font("Helvetica", size=12)
+                        pdf.cell(0, 8, f"Tienda: {tienda_seleccionada}", ln=1)
+                        ran = f"Rango historico: {fecha_min.date()} a {fecha_max.date()}"
+                        pdf.cell(0, 8, ran, ln=1)
+                        pdf.cell(0, 8, f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=1)
+
+                    # Heatmaps
+                    if inc_heatmaps:
+                        # Regenerar heatmaps si no existen (por ejemplo en 'Solo Forecast')
+                        if fig_heatmap_pedidos is None:
+                            fig_heatmap_pedidos = px.density_heatmap(
+                                df_tienda, x='hora', y='fecha', z='pedidos', histfunc='sum', nbinsx=24,
+                                labels={'hora': 'Hora del dia', 'fecha': 'Fecha', 'pedidos': 'Pedidos'},
+                                color_continuous_scale='Blues'
+                            )
+                            fig_heatmap_pedidos.update_layout(template='simple_white')
+                        if fig_heatmap_items is None:
+                            fig_heatmap_items = px.density_heatmap(
+                                df_tienda, x='hora', y='fecha', z='items', histfunc='sum', nbinsx=24,
+                                labels={'hora': 'Hora del dia', 'fecha': 'Fecha', 'items': 'Items'},
+                                color_continuous_scale='Greens'
+                            )
+                            fig_heatmap_items.update_layout(template='simple_white')
+
+                        img1 = fig_to_png_path(fig_heatmap_pedidos)
+                        img2 = fig_to_png_path(fig_heatmap_items)
+
+                        pdf.add_page()
+                        pdf.set_font("Helvetica", "B", 14)
+                        pdf.cell(0, 8, "Heatmap - Pedidos", ln=1)
+                        pdf.image(img1, x=10, y=None, w=190)
+                        pdf.ln(4)
+                        pdf.set_font("Helvetica", "B", 14)
+                        pdf.cell(0, 8, "Heatmap - Items", ln=1)
+                        pdf.image(img2, x=10, y=None, w=190)
+
+                    # Forecast
+                    if inc_forecast:
+                        img3 = fig_to_png_path(fig1)
+                        img4 = fig_to_png_path(fig2)
+                        pdf.add_page()
+                        pdf.set_font("Helvetica", "B", 14)
+                        pdf.cell(0, 8, "Forecast - Pedidos (con bandas)", ln=1)
+                        pdf.image(img3, x=10, y=None, w=190)
+                        pdf.ln(4)
+                        pdf.set_font("Helvetica", "B", 14)
+                        pdf.cell(0, 8, "Forecast - Items (con bandas)", ln=1)
+                        pdf.image(img4, x=10, y=None, w=190)
+
+                        # Tablas compactas (ultimos dias predichos)
+                        def tabla_compacta(pdf, df_tab, titulo):
+                            pdf.ln(2)
+                            pdf.set_font("Helvetica", "B", 12)
+                            pdf.cell(0, 8, titulo, ln=1)
+                            pdf.set_font("Helvetica", size=10)
+                            # Limitar filas para caber en una pagina
+                            sub = df_tab.tail( min(10, len(df_tab)) )
+                            # Encabezados
+                            headers = list(sub.columns)
+                            widths = [40, 45, 45, 45]
+                            for h, w in zip(headers, widths):
+                                pdf.cell(w, 8, str(h), border=1)
+                            pdf.ln(8)
+                            # Filas
+                            for _, row in sub.iterrows():
+                                pdf.cell(widths[0], 8, str(row[headers[0]])[:20], border=1)
+                                pdf.cell(widths[1], 8, f"{row[headers[1]]:.2f}", border=1)
+                                pdf.cell(widths[2], 8, f"{row[headers[2]]:.2f}", border=1)
+                                pdf.cell(widths[3], 8, f"{row[headers[3]]:.2f}", border=1)
+                                pdf.ln(8)
+
+                        pdf.add_page()
+                        tabla_compacta(pdf, tabla_ped, "Tabla - Forecast Pedidos (ultimos dias)")
+                        tabla_compacta(pdf, tabla_items, "Tabla - Forecast Items (ultimos dias)")
+
+                    # Productividad
+                    if inc_productividad:
+                        pdf.add_page()
+                        pdf.set_font("Helvetica", "B", 14)
+                        pdf.cell(0, 8, "Productividad - Picking (Top)", ln=1)
+                        if prod_picker is not None and len(prod_picker) > 0:
+                            top_pick = prod_picker.sort_values('items_por_hora', ascending=False).head(15)
+                            # Dibujar tabla
+                            pdf.set_font("Helvetica", size=10)
+                            headers = list(top_pick.columns)
+                            widths = [35, 18, 25, 22, 30, 30, 30]
+                            # Encabezados
+                            for h, w in zip(headers, widths):
+                                pdf.cell(w, 8, str(h)[:15], border=1)
+                            pdf.ln(8)
+                            for _, row in top_pick.iterrows():
+                                pdf.cell(widths[0], 8, str(row[headers[0]])[:15], border=1)
+                                pdf.cell(widths[1], 8, str(int(row[headers[1]])), border=1)
+                                pdf.cell(widths[2], 8, str(int(row[headers[2]])), border=1)
+                                pdf.cell(widths[3], 8, f"{row[headers[3]]:.2f}", border=1)
+                                pdf.cell(widths[4], 8, f"{row[headers[4]]:.2f}", border=1)
+                                pdf.cell(widths[5], 8, f"{row[headers[5]]:.2f}", border=1)
+                                pdf.cell(widths[6], 8, f"{row[headers[6]]:.1f}", border=1)
+                                pdf.ln(8)
+                        else:
+                            pdf.set_font("Helvetica", size=11)
+                            pdf.cell(0, 8, "No hay datos de picking.", ln=1)
+
+                        pdf.ln(4)
+                        pdf.set_font("Helvetica", "B", 14)
+                        pdf.cell(0, 8, "Productividad - Delivery (Top)", ln=1)
+                        if prod_driver is not None and len(prod_driver) > 0:
+                            top_drv = prod_driver.sort_values('ordenes_por_hora', ascending=False).head(15)
+                            pdf.set_font("Helvetica", size=10)
+                            headers = list(top_drv.columns)
+                            widths = [45, 20, 25, 30, 30]
+                            for h, w in zip(headers, widths):
+                                pdf.cell(w, 8, str(h)[:18], border=1)
+                            pdf.ln(8)
+                            for _, row in top_drv.iterrows():
+                                pdf.cell(widths[0], 8, str(row[headers[0]])[:18], border=1)
+                                pdf.cell(widths[1], 8, str(int(row[headers[1]])), border=1)
+                                pdf.cell(widths[2], 8, f"{row[headers[2]]:.2f}", border=1)
+                                pdf.cell(widths[3], 8, f"{row[headers[3]]:.2f}", border=1)
+                                pdf.cell(widths[4], 8, f"{row[headers[4]]:.1f}", border=1)
+                                pdf.ln(8)
+                        else:
+                            pdf.set_font("Helvetica", size=11)
+                            pdf.cell(0, 8, "No hay datos de delivery.", ln=1)
+
+                    # Entrega del archivo
+                    pdf_bytes = pdf.output(dest='S').encode('latin-1')
+                    file_name = f"reporte_{tienda_seleccionada}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                    st.success("Reporte PDF generado.")
+                    st.download_button("⬇️ Descargar reporte PDF", data=pdf_bytes, file_name=file_name, mime="application/pdf")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
 else:
     st.info("⬅️ Por favor carga un archivo CSV para comenzar.")
+
 
