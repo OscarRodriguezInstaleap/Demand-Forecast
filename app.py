@@ -107,18 +107,31 @@ if archivos:
                     df_tienda_week = df_tienda.copy()
                     df_tienda_week['fecha_dt'] = pd.to_datetime(df_tienda_week['fecha'])
                     df_tienda_week['dow_num'] = df_tienda_week['fecha_dt'].dt.weekday  # 0=Lunes
-                    mapa_dow = {0:'Lunes',1:'Martes',2:'Miércoles',3:'Jueves',4:'Viernes',5:'Sábado',6:'Domingo'}
-                    df_tienda_week['dia_semana'] = df_tienda_week['dow_num'].map(mapa_dow)
                     orden_dow = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
-                    df_tienda_week['dia_semana'] = pd.Categorical(df_tienda_week['dia_semana'], categories=orden_dow, ordered=True)
+                    mapa_dow = dict(enumerate(orden_dow))
+                    df_tienda_week['dia_semana'] = df_tienda_week['dow_num'].map(mapa_dow)
+                    df_tienda_week['dia_semana'] = pd.Categorical(
+                        df_tienda_week['dia_semana'],
+                        categories=orden_dow,
+                        ordered=True
+                    )
 
                     st.subheader("Heatmap de pedidos por día de la semana y hora")
                     fig_heatmap_dow = px.density_heatmap(
-                        df_tienda_week, x='hora', y='dia_semana', z='pedidos', histfunc='sum', nbinsx=24,
+                        df_tienda_week,
+                        x='hora',
+                        y='dia_semana',
+                        z='pedidos',
+                        histfunc='sum',
+                        nbinsx=24,
                         labels={'hora': 'Hora del día', 'dia_semana': 'Día de la semana', 'pedidos': 'Cantidad de pedidos'},
                         color_continuous_scale='Blues'
                     )
-                    fig_heatmap_dow.update_layout(height=380, template='simple_white')
+                    fig_heatmap_dow.update_layout(
+                        height=380,
+                        template='simple_white',
+                        yaxis=dict(categoryorder='array', categoryarray=orden_dow, autorange='reversed')
+                    )
                     st.plotly_chart(fig_heatmap_dow, use_container_width=True)
 
                 # === BLOQUE 4: Métricas de productividad por tienda (Picking y Delivery) ===
