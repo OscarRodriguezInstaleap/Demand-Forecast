@@ -1,4 +1,4 @@
-# Versión 1.2 - Multiarchivo + Forecast no negativo + mejoras UX previas - 2025-08-20
+# Versión 1.3 - Selector Items/SKUs + multi-archivo + forecast no negativo + UX - 2025-08-22
 
 import streamlit as st
 import pandas as pd
@@ -41,7 +41,6 @@ if archivos:
             st.error("No se pudo leer ningún archivo válido.")
         else:
             df = pd.concat(dfs, ignore_index=True)
-            # Evitar duplicados exactos si suben meses solapados
             df = df.drop_duplicates().reset_index(drop=True)
 
             st.caption(f"Archivos cargados: {len(archivos)} | Filas totales: {total_rows:,} | Filas tras deduplicar: {len(df):,}")
@@ -52,6 +51,16 @@ if archivos:
             if not all(col in df.columns for col in columnas_necesarias):
                 st.error(f"❌ El archivo debe contener las siguientes columnas: {columnas_necesarias}")
             else:
+                # Selector de métrica base si hay columna SKU
+                tiene_sku = 'SKU' in df.columns
+                if tiene_sku:
+                    base_opciones = {'Items': 'items', 'SKUs': 'skus'}
+                    base_seleccion = st.sidebar.radio("Métrica base para el análisis", list(base_opciones.keys()), index=0)
+                    base_col = base_opciones[base_seleccion]
+                else:
+                    base_seleccion = 'Items'
+                    base_col = 'items'
+
                 # Filtro y estandarización
                 df = df[df['estado'] == 'FINISHED'].copy()
                 df['slot_from'] = pd.to_datetime(df['slot_from'], errors='coerce')
@@ -61,11 +70,18 @@ if archivos:
                 df['items'] = pd.to_numeric(df['items'], errors='coerce')
                 df = df.dropna(subset=['items'])
 
-                # Base por tienda/fecha/hora
+                # Base por tienda/fecha/hora (incluye SKUs si existe)
+                agg_kwargs = {
+                    'pedidos': ('numero_pedido', 'nunique'),
+                    'items':   ('items', 'sum'),
+                }
+                if tiene_sku:
+                    agg_kwargs['skus'] = ('SKU', 'nunique')
+
                 agrupado = (
                     df.groupby(['Tienda', 'fecha', 'hora'])
-                    .agg(pedidos=('numero_pedido', 'nunique'), items=('items', 'sum'))
-                    .reset_index()
+                      .agg(**agg_kwargs)
+                      .reset_index()
                 )
 
                 with st.expander("Datos procesados por Tienda / Día / Hora (colapsado)", expanded=False):
@@ -74,6 +90,7 @@ if archivos:
                 # Selector de tienda
                 tiendas = agrupado['Tienda'].unique().tolist()
                 tienda_seleccionada = st.selectbox("Selecciona una tienda para visualizar:", tiendas)
+
                 df_tienda = agrupado[agrupado['Tienda'] == tienda_seleccionada].copy()
 
                 # Guardar rango de fechas para reportes
@@ -82,7 +99,7 @@ if archivos:
 
                 # === BLOQUE 2: Visualización histórica ===
                 if modo in ["Vista completa", "Vista experimental"]:
-                    # 2 heatmaps en la misma fila
+                    # 2 heatmaps en la misma fila (pedidos y base)
                     c1, c2 = st.columns(2)
                     with c1:
                         st.subheader(f"Heatmap de pedidos por hora — {tienda_seleccionada}")
@@ -94,14 +111,15 @@ if archivos:
                         fig_heatmap_pedidos.update_layout(height=400, template='simple_white')
                         st.plotly_chart(fig_heatmap_pedidos, use_container_width=True)
                     with c2:
-                        st.subheader(f"Heatmap de items por hora — {tienda_seleccionada}")
-                        fig_heatmap_items = px.density_heatmap(
-                            df_tienda, x='hora', y='fecha', z='items', histfunc='sum', nbinsx=24,
-                            labels={'hora': 'Hora del día', 'fecha': 'Fecha', 'items': 'Cantidad de items'},
+                        etiqueta_base = 'items' if base_col == 'items' else 'SKUs'
+                        st.subheader(f"Heatmap de {etiqueta_base} por hora — {tienda_seleccionada}")
+                        fig_heatmap_base = px.density_heatmap(
+                            df_tienda, x='hora', y='fecha', z=base_col, histfunc='sum', nbinsx=24,
+                            labels={'hora': 'Hora del día', 'fecha': 'Fecha', base_col: f'Cantidad de {etiqueta_base}'},
                             color_continuous_scale='Greens'
                         )
-                        fig_heatmap_items.update_layout(height=400, template='simple_white')
-                        st.plotly_chart(fig_heatmap_items, use_container_width=True)
+                        fig_heatmap_base.update_layout(height=400, template='simple_white')
+                        st.plotly_chart(fig_heatmap_base, use_container_width=True)
 
                     # 3er heatmap: día de la semana vs hora (pedidos)
                     df_tienda_week = df_tienda.copy()
@@ -152,34 +170,49 @@ if archivos:
 
                     # --- Picking
                     if 'picker' in df_store.columns:
+                        agg_pick = {
+                            'items': ('items', 'sum'),
+                            'pick_start': ('actual_inicio_picking', 'min'),
+                            'pick_end': ('actual_fin_picking', 'max')
+                        }
+                        if tiene_sku:
+                            agg_pick['skus_cnt'] = ('SKU', 'nunique')
                         pick_base = (
                             df_store.dropna(subset=['picker'])
                             .groupby(['numero_pedido', 'picker'], as_index=False)
-                            .agg(
-                                items=('items', 'max'),
-                                pick_start=('actual_inicio_picking', 'min'),
-                                pick_end=('actual_fin_picking', 'max')
-                            )
+                            .agg(**agg_pick)
                         )
                         pick_base['min_picking'] = (pick_base['pick_end'] - pick_base['pick_start']).dt.total_seconds() / 60.0
                         pick_base = pick_base.dropna(subset=['min_picking'])
                         pick_base = pick_base[pick_base['min_picking'] > 0]
 
+                        agg_prod = {
+                            'ordenes': ('numero_pedido', 'nunique'),
+                            'items_totales': ('items', 'sum'),
+                            'min_totales': ('min_picking', 'sum'),
+                            'min_promedio_por_orden': ('min_picking', 'mean')
+                        }
+                        if 'skus_cnt' in pick_base.columns:
+                            agg_prod['skus_totales'] = ('skus_cnt', 'sum')
+
                         prod_picker = (
-                            pick_base.groupby('picker')
-                            .agg(
-                                ordenes=('numero_pedido', 'nunique'),
-                                items_totales=('items', 'sum'),
-                                min_totales=('min_picking', 'sum'),
-                                min_promedio_por_orden=('min_picking', 'mean')
-                            )
-                            .reset_index()
+                            pick_base.groupby('picker').agg(**agg_prod).reset_index()
                         )
                         prod_picker['horas_totales'] = prod_picker['min_totales'] / 60.0
-                        prod_picker['items_por_hora'] = prod_picker['items_totales'] / prod_picker['horas_totales']
-                        prod_picker['ordenes_por_hora'] = prod_picker['ordenes'] / prod_picker['horas_totales']
+                        # KPI base por hora (items o SKUs)
+                        if base_col == 'items':
+                            prod_picker['base_por_hora'] = prod_picker['items_totales'] / prod_picker['horas_totales']
+                            y2_label = 'Items/hora'
+                        else:
+                            # si no hay skus_totales por alguna razón, caer a items
+                            if 'skus_totales' in prod_picker.columns:
+                                prod_picker['base_por_hora'] = prod_picker['skus_totales'] / prod_picker['horas_totales']
+                                y2_label = 'SKUs/hora'
+                            else:
+                                prod_picker['base_por_hora'] = prod_picker['items_totales'] / prod_picker['horas_totales']
+                                y2_label = 'Items/hora'
 
-                        # Top 10 gráfico: barras (ordenes) + línea (items/hora)
+                        # Top 10 gráfico: barras (ordenes) + línea (base_por_hora)
                         top_pick = prod_picker.sort_values('ordenes', ascending=False).head(10)
                         fig_top_pick = make_subplots(specs=[[{"secondary_y": True}]])
                         fig_top_pick.add_trace(
@@ -187,19 +220,23 @@ if archivos:
                             secondary_y=False
                         )
                         fig_top_pick.add_trace(
-                            go.Scatter(x=top_pick['picker'], y=top_pick['items_por_hora'], mode='lines+markers', name='Items/hora'),
+                            go.Scatter(x=top_pick['picker'], y=top_pick['base_por_hora'], mode='lines+markers', name=y2_label),
                             secondary_y=True
                         )
                         fig_top_pick.update_layout(template='simple_white', height=420, legend_title_text='')
                         fig_top_pick.update_xaxes(title_text='Picker (Top 10)')
                         fig_top_pick.update_yaxes(title_text='Órdenes', secondary_y=False)
-                        fig_top_pick.update_yaxes(title_text='Items/hora', secondary_y=True)
+                        fig_top_pick.update_yaxes(title_text=y2_label, secondary_y=True)
                         st.plotly_chart(fig_top_pick, use_container_width=True)
 
                         with st.expander("Tabla de productividad - Picking (colapsada)", expanded=False):
-                            cols_picker = ['picker', 'ordenes', 'items_totales', 'horas_totales', 'items_por_hora', 'ordenes_por_hora', 'min_promedio_por_orden']
-                            prodp = prod_picker[cols_picker].round({'horas_totales': 2, 'items_por_hora': 2, 'ordenes_por_hora': 2, 'min_promedio_por_orden': 1})
-                            st.dataframe(prodp.sort_values('items_por_hora', ascending=False))
+                            cols_base = ['picker', 'ordenes', 'horas_totales', 'min_promedio_por_orden']
+                            if 'items_totales' in prod_picker.columns:
+                                cols_base.append('items_totales')
+                            if 'skus_totales' in prod_picker.columns:
+                                cols_base.append('skus_totales')
+                            cols_base.append('base_por_hora')
+                            st.dataframe(prod_picker[cols_base].round(2).sort_values('base_por_hora', ascending=False))
                     else:
                         st.info("No se encontraron datos de 'picker' en el archivo para calcular productividad de picking.")
 
@@ -229,7 +266,6 @@ if archivos:
                         prod_driver['horas_totales'] = prod_driver['min_totales'] / 60.0
                         prod_driver['ordenes_por_hora'] = prod_driver['ordenes'] / prod_driver['horas_totales']
 
-                        # Top 10 gráfico: barras (órdenes) + línea (órdenes/hora)
                         top_drv = prod_driver.sort_values('ordenes', ascending=False).head(10)
                         fig_top_drv = make_subplots(specs=[[{"secondary_y": True}]])
                         fig_top_drv.add_trace(
@@ -248,8 +284,7 @@ if archivos:
 
                         with st.expander("Tabla de productividad - Delivery (colapsada)", expanded=False):
                             cols_driver = ['driver', 'ordenes', 'horas_totales', 'ordenes_por_hora', 'min_promedio_por_orden']
-                            prodd = prod_driver[cols_driver].round({'horas_totales': 2, 'ordenes_por_hora': 2, 'min_promedio_por_orden': 1})
-                            st.dataframe(prodd.sort_values('ordenes_por_hora', ascending=False))
+                            st.dataframe(prod_driver[cols_driver].round(2).sort_values('ordenes_por_hora', ascending=False))
                     else:
                         st.info("No se encontraron datos de 'driver' en el archivo para calcular productividad de delivery.")
 
@@ -268,11 +303,20 @@ if archivos:
                 st.subheader("Forecast de Demanda")
                 dias_prediccion = st.number_input("¿Cuántos días quieres predecir? (1 a 90)", min_value=1, max_value=90, value=7)
 
-                df_pred = df_tienda.groupby('fecha').agg({'pedidos': 'sum','items': 'sum'}).reset_index()
+                # Para el forecast diario, calculamos desde la tabla original por día (distinct SKUs por día si aplica)
+                agg_daily = {'pedidos': ('numero_pedido', 'nunique'), 'items': ('items', 'sum')}
+                if tiene_sku:
+                    agg_daily['skus'] = ('SKU', 'nunique')
+                df_store_daily = (
+                    df[df['Tienda'] == tienda_seleccionada]
+                    .groupby('fecha')
+                    .agg(**agg_daily)
+                    .reset_index()
+                )
 
                 # Forecast pedidos
                 st.markdown("#### Predicción de Pedidos Totales")
-                df_pedidos = df_pred[['fecha', 'pedidos']].rename(columns={'fecha': 'ds', 'pedidos': 'y'})
+                df_pedidos = df_store_daily[['fecha', 'pedidos']].rename(columns={'fecha': 'ds', 'pedidos': 'y'})
                 model_pedidos = Prophet()
                 model_pedidos.fit(df_pedidos)
                 future_pedidos = model_pedidos.make_future_dataframe(periods=dias_prediccion)
@@ -280,61 +324,62 @@ if archivos:
                 if ajuste_fechas:
                     mask = (forecast_pedidos['ds'] >= ajuste_fechas['inicio']) & (forecast_pedidos['ds'] <= ajuste_fechas['fin'])
                     forecast_pedidos.loc[mask, ['yhat', 'yhat_lower', 'yhat_upper']] *= (1 + ajuste_fechas['incremento'])
-                # Clamp a 0 valores negativos
                 forecast_pedidos[['yhat','yhat_lower','yhat_upper']] = forecast_pedidos[['yhat','yhat_lower','yhat_upper']].clip(lower=0)
                 fig1 = plot_plotly(model_pedidos, forecast_pedidos)
                 st.plotly_chart(fig1, use_container_width=True)
                 tabla_ped = forecast_pedidos[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(dias_prediccion).rename(columns={'ds': 'Fecha','yhat': 'Predicción','yhat_lower': 'Límite Inferior','yhat_upper': 'Límite Superior'})
                 st.dataframe(tabla_ped)
 
-                # Forecast items
-                st.markdown("#### Predicción de Items Totales")
-                df_items = df_pred[['fecha', 'items']].rename(columns={'fecha': 'ds', 'items': 'y'})
-                model_items = Prophet()
-                model_items.fit(df_items)
-                future_items = model_items.make_future_dataframe(periods=dias_prediccion)
-                forecast_items = model_items.predict(future_items)
+                # Forecast base (Items o SKUs)
+                etiqueta_base_titulo = 'Items' if base_col == 'items' else 'SKUs'
+                st.markdown(f"#### Predicción de {etiqueta_base_titulo} Totales")
+                df_base = df_store_daily[['fecha', base_col]].rename(columns={'fecha': 'ds', base_col: 'y'})
+                model_base = Prophet()
+                model_base.fit(df_base)
+                future_base = model_base.make_future_dataframe(periods=dias_prediccion)
+                forecast_base = model_base.predict(future_base)
                 if ajuste_fechas:
-                    mask = (forecast_items['ds'] >= ajuste_fechas['inicio']) & (forecast_items['ds'] <= ajuste_fechas['fin'])
-                    forecast_items.loc[mask, ['yhat', 'yhat_lower', 'yhat_upper']] *= (1 + ajuste_fechas['incremento'])
-                # Clamp a 0 valores negativos
-                forecast_items[['yhat','yhat_lower','yhat_upper']] = forecast_items[['yhat','yhat_lower','yhat_upper']].clip(lower=0)
-                fig2 = plot_plotly(model_items, forecast_items)
+                    mask = (forecast_base['ds'] >= ajuste_fechas['inicio']) & (forecast_base['ds'] <= ajuste_fechas['fin'])
+                    forecast_base.loc[mask, ['yhat', 'yhat_lower', 'yhat_upper']] *= (1 + ajuste_fechas['incremento'])
+                forecast_base[['yhat','yhat_lower','yhat_upper']] = forecast_base[['yhat','yhat_lower','yhat_upper']].clip(lower=0)
+                fig2 = plot_plotly(model_base, forecast_base)
                 st.plotly_chart(fig2, use_container_width=True)
-                tabla_items = forecast_items[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(dias_prediccion).rename(columns={'ds': 'Fecha','yhat': 'Predicción','yhat_lower': 'Límite Inferior','yhat_upper': 'Límite Superior'})
-                st.dataframe(tabla_items)
+                tabla_base = forecast_base[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(dias_prediccion).rename(columns={'ds': 'Fecha','yhat': 'Predicción','yhat_lower': 'Límite Inferior','yhat_upper': 'Límite Superior'})
+                st.dataframe(tabla_base)
 
                 # === BLOQUE 7: Dimensionamiento de recursos (correlación demanda-productividad) ===
                 st.subheader("Dimensionamiento de recursos (estimado)")
                 # Tasas base desde productividad si existen, si no valores por defecto
-                items_rate_default = None
+                base_rate_default = None
+                if prod_picker is not None and 'base_por_hora' in (prod_picker.columns if prod_picker is not None else []):
+                    base_rate_default = float(prod_picker['base_por_hora'].median())
+                if base_rate_default is None or math.isnan(base_rate_default):
+                    base_rate_default = 60.0 if base_col == 'items' else 40.0
+
                 orders_rate_default = None
-                if prod_picker is not None and len(prod_picker) > 0:
-                    items_rate_default = float(prod_picker['items_por_hora'].median())
-                if prod_driver is not None and len(prod_driver) > 0:
+                if prod_driver is not None and 'ordenes_por_hora' in (prod_driver.columns if prod_driver is not None else []):
                     orders_rate_default = float(prod_driver['ordenes_por_hora'].median())
-                if items_rate_default is None or math.isnan(items_rate_default):
-                    items_rate_default = 60.0  # fallback
                 if orders_rate_default is None or math.isnan(orders_rate_default):
-                    orders_rate_default = 3.0  # fallback
+                    orders_rate_default = 3.0
 
                 cA, cB, cC = st.columns(3)
-                items_por_hora = cA.number_input("Rendimiento picker (items/hora)", min_value=1.0, max_value=1000.0, value=float(round(items_rate_default,2)))
+                base_label_input = 'items/hora por picker' if base_col == 'items' else 'SKUs/hora por picker'
+                base_por_hora = cA.number_input(base_label_input, min_value=1.0, max_value=1000.0, value=float(round(base_rate_default,2)))
                 ordenes_por_hora = cB.number_input("Rendimiento driver (órdenes/hora)", min_value=0.5, max_value=50.0, value=float(round(orders_rate_default,2)))
                 horas_turno = cC.number_input("Horas por turno", min_value=1.0, max_value=12.0, value=8.0)
                 factor_seguridad = st.slider("Factor de seguridad adicional (%)", min_value=0, max_value=100, value=10) / 100.0
 
-                # Construir tabla de dimensionamiento para los próximos dias_prediccion
+                # Construir tabla de dimensionamiento
                 dim = pd.DataFrame({'Fecha': forecast_pedidos['ds'].tail(dias_prediccion).reset_index(drop=True)})
                 dim['Pedidos (yhat)'] = forecast_pedidos['yhat'].tail(dias_prediccion).values
-                dim['Items (yhat)'] = forecast_items['yhat'].tail(dias_prediccion).values
+                dim[f'{etiqueta_base_titulo} (yhat)'] = forecast_base['yhat'].tail(dias_prediccion).values
                 dim['Pedidos (low)'] = forecast_pedidos['yhat_lower'].tail(dias_prediccion).values
                 dim['Pedidos (high)'] = forecast_pedidos['yhat_upper'].tail(dias_prediccion).values
-                dim['Items (low)'] = forecast_items['yhat_lower'].tail(dias_prediccion).values
-                dim['Items (high)'] = forecast_items['yhat_upper'].tail(dias_prediccion).values
+                dim[f'{etiqueta_base_titulo} (low)'] = forecast_base['yhat_lower'].tail(dias_prediccion).values
+                dim[f'{etiqueta_base_titulo} (high)'] = forecast_base['yhat_upper'].tail(dias_prediccion).values
 
                 # Horas requeridas
-                dim['Horas picker (yhat)'] = dim['Items (yhat)'] / max(items_por_hora, 1e-9)
+                dim['Horas picker (yhat)'] = dim[f'{etiqueta_base_titulo} (yhat)'] / max(base_por_hora, 1e-9)
                 dim['Horas driver (yhat)'] = dim['Pedidos (yhat)'] / max(ordenes_por_hora, 1e-9)
 
                 # Recursos (con factor de seguridad)
@@ -412,7 +457,7 @@ if archivos:
                         # Heatmaps
                         if inc_heatmaps:
                             img1 = heatmap_png_from_df(df_tienda, 'pedidos', 'Heatmap - Pedidos')
-                            img2 = heatmap_png_from_df(df_tienda, 'items', 'Heatmap - Items')
+                            img2 = heatmap_png_from_df(df_tienda, base_col, f'Heatmap - {etiqueta_base_titulo}')
                             if img1 or img2:
                                 pdf.add_page()
                                 if img1:
@@ -422,20 +467,20 @@ if archivos:
                                     pdf.ln(4)
                                 if img2:
                                     pdf.set_font('Helvetica', 'B', 14)
-                                    pdf.cell(0, 8, 'Heatmap - Items', ln=1)
+                                    pdf.cell(0, 8, f'Heatmap - {etiqueta_base_titulo}', ln=1)
                                     pdf.image(img2, x=10, y=None, w=190)
 
                         # Forecast
                         if inc_forecast:
                             img3 = prophet_png(model_pedidos, forecast_pedidos, 'Forecast - Pedidos (con bandas)')
-                            img4 = prophet_png(model_items, forecast_items, 'Forecast - Items (con bandas)')
+                            img4 = prophet_png(model_base, forecast_base, f'Forecast - {etiqueta_base_titulo} (con bandas)')
                             pdf.add_page()
                             pdf.set_font('Helvetica', 'B', 14)
                             pdf.cell(0, 8, 'Forecast - Pedidos (con bandas)', ln=1)
                             pdf.image(img3, x=10, y=None, w=190)
                             pdf.ln(4)
                             pdf.set_font('Helvetica', 'B', 14)
-                            pdf.cell(0, 8, 'Forecast - Items (con bandas)', ln=1)
+                            pdf.cell(0, 8, f'Forecast - {etiqueta_base_titulo} (con bandas)', ln=1)
                             pdf.image(img4, x=10, y=None, w=190)
 
                             # Tablas compactas (últimos días predichos)
@@ -459,7 +504,7 @@ if archivos:
 
                             pdf.add_page()
                             tabla_compacta(pdf, tabla_ped, 'Tabla - Forecast Pedidos (últimos días)')
-                            tabla_compacta(pdf, tabla_items, 'Tabla - Forecast Items (últimos días)')
+                            tabla_compacta(pdf, tabla_base, f'Tabla - Forecast {etiqueta_base_titulo} (últimos días)')
 
                         # Productividad
                         if inc_productividad:
@@ -467,21 +512,26 @@ if archivos:
                             pdf.set_font('Helvetica', 'B', 14)
                             pdf.cell(0, 8, 'Productividad - Picking (Top)', ln=1)
                             if prod_picker is not None and len(prod_picker) > 0:
-                                top_pick = prod_picker.sort_values('items_por_hora', ascending=False).head(15)
+                                # Construir tabla en PDF con columnas relevantes
+                                top_pick = prod_picker.sort_values('ordenes', ascending=False).head(15)
                                 pdf.set_font('Helvetica', size=10)
-                                headers = list(top_pick.columns)
-                                widths = [35, 18, 25, 22, 30, 30, 30]
+                                headers = ['picker','ordenes','horas_totales','min_promedio_por_orden']
+                                if 'items_totales' in prod_picker.columns:
+                                    headers.append('items_totales')
+                                if 'skus_totales' in prod_picker.columns:
+                                    headers.append('skus_totales')
+                                headers.append('base_por_hora')
+                                widths = [35, 20, 25, 30, 28, 28, 28][:len(headers)]
                                 for h, w in zip(headers, widths):
-                                    pdf.cell(w, 8, str(h)[:15], border=1)
+                                    pdf.cell(w, 8, str(h)[:18], border=1)
                                 pdf.ln(8)
                                 for _, row in top_pick.iterrows():
-                                    pdf.cell(widths[0], 8, str(row[headers[0]])[:15], border=1)
-                                    pdf.cell(widths[1], 8, str(int(row[headers[1]])), border=1)
-                                    pdf.cell(widths[2], 8, str(int(row[headers[2]])), border=1)
-                                    pdf.cell(widths[3], 8, f"{row[headers[3]]:.2f}", border=1)
-                                    pdf.cell(widths[4], 8, f"{row[headers[4]]:.2f}", border=1)
-                                    pdf.cell(widths[5], 8, f"{row[headers[5]]:.2f}", border=1)
-                                    pdf.cell(widths[6], 8, f"{row[headers[6]]:.1f}", border=1)
+                                    for h, w in zip(headers, widths):
+                                        val = row[h]
+                                        if isinstance(val, (float, np.floating)):
+                                            pdf.cell(w, 8, f"{val:.2f}", border=1)
+                                        else:
+                                            pdf.cell(w, 8, str(val)[:18], border=1)
                                     pdf.ln(8)
                             else:
                                 pdf.set_font('Helvetica', size=11)
@@ -493,17 +543,18 @@ if archivos:
                             if prod_driver is not None and len(prod_driver) > 0:
                                 top_drv = prod_driver.sort_values('ordenes_por_hora', ascending=False).head(15)
                                 pdf.set_font('Helvetica', size=10)
-                                headers = list(top_drv.columns)
+                                headers = ['driver','ordenes','horas_totales','ordenes_por_hora','min_promedio_por_orden']
                                 widths = [45, 20, 25, 30, 30]
                                 for h, w in zip(headers, widths):
                                     pdf.cell(w, 8, str(h)[:18], border=1)
                                 pdf.ln(8)
                                 for _, row in top_drv.iterrows():
-                                    pdf.cell(widths[0], 8, str(row[headers[0]])[:18], border=1)
-                                    pdf.cell(widths[1], 8, str(int(row[headers[1]])), border=1)
-                                    pdf.cell(widths[2], 8, f"{row[headers[2]]:.2f}", border=1)
-                                    pdf.cell(widths[3], 8, f"{row[headers[3]]:.2f}", border=1)
-                                    pdf.cell(widths[4], 8, f"{row[headers[4]]:.1f}", border=1)
+                                    for h, w in zip(headers, widths):
+                                        val = row[h]
+                                        if isinstance(val, (float, np.floating)):
+                                            pdf.cell(w, 8, f"{val:.2f}", border=1)
+                                        else:
+                                            pdf.cell(w, 8, str(val)[:18], border=1)
                                     pdf.ln(8)
                             else:
                                 pdf.set_font('Helvetica', size=11)
@@ -530,7 +581,8 @@ if archivos:
                             zf.writestr(f"productividad_delivery_{tienda_seleccionada}.csv", prod_driver.to_csv(index=False))
                         # Forecasts completos (ya clippeados a 0)
                         zf.writestr(f"forecast_pedidos_{tienda_seleccionada}.csv", forecast_pedidos.to_csv(index=False))
-                        zf.writestr(f"forecast_items_{tienda_seleccionada}.csv", forecast_items.to_csv(index=False))
+                        nombre_base_arch = 'items' if base_col == 'items' else 'skus'
+                        zf.writestr(f"forecast_{nombre_base_arch}_{tienda_seleccionada}.csv", forecast_base.to_csv(index=False))
                     buffer.seek(0)
                     st.download_button("Descargar ZIP", data=buffer, file_name=f"consolidados_{tienda_seleccionada}.zip", mime="application/zip")
 
