@@ -51,18 +51,27 @@ if archivos:
             if not all(col in df.columns for col in columnas_necesarias):
                 st.error(f"❌ El archivo debe contener las siguientes columnas: {columnas_necesarias}")
             else:
-                # Selector de métrica base si hay columna SKU (detección robusta)
+                # Selector de métrica base si hay columna SKU/SKUs (detección robusta)
                 col_map = {c.strip().lower(): c for c in df.columns}
-                sku_candidates = ['sku','sku_id','id_sku','codigo_sku','cod_sku','product_id','producto_id','id_producto','productcode','product_code']
-                sku_col = next((col_map[k] for k in sku_candidates if k in col_map), None)
-                tiene_sku = sku_col is not None
-                if tiene_sku:
-                    st.sidebar.caption(f"Columna SKU detectada: {sku_col}")
+                # Detectar columna de CONTEO de SKUs (p.ej. "skus")
+                skus_count_col = col_map.get('skus')
+                tiene_sku_count = skus_count_col is not None
+                # Detectar columna de ID de SKU (p.ej. sku, product_id, etc.)
+                sku_id_candidates = ['sku','sku_id','id_sku','codigo_sku','cod_sku','product_id','producto_id','id_producto','productcode','product_code']
+                sku_id_col = next((col_map[k] for k in sku_id_candidates if k in col_map), None)
+                tiene_sku_id = sku_id_col is not None
+                tiene_sku_any = tiene_sku_count or tiene_sku_id
+
+                if tiene_sku_any:
+                    if tiene_sku_count:
+                        st.sidebar.caption(f"Columna SKUs (conteo) detectada: {skus_count_col}")
+                    if tiene_sku_id:
+                        st.sidebar.caption(f"Columna SKU (id) detectada: {sku_id_col}")
                     base_opciones = {'Items': 'items', 'SKUs': 'skus'}
                     base_seleccion = st.sidebar.radio("Métrica base para el análisis", list(base_opciones.keys()), index=0)
                     base_col = base_opciones[base_seleccion]
                 else:
-                    st.sidebar.caption("No se detectó columna SKU. Usando Items.")
+                    st.sidebar.caption("No se detectó columna SKU/SKUs. Usando Items.")
                     base_seleccion = 'Items'
                     base_col = 'items'
 
@@ -74,14 +83,19 @@ if archivos:
                 df['hora'] = df['slot_from'].dt.hour
                 df['items'] = pd.to_numeric(df['items'], errors='coerce')
                 df = df.dropna(subset=['items'])
+                # Si existe columna de conteo de SKUs, convertir a numérico (no forzamos drop)
+                if 'tiene_sku_count' in locals() and tiene_sku_count and skus_count_col in df.columns:
+                    df[skus_count_col] = pd.to_numeric(df[skus_count_col], errors='coerce')
 
                 # Base por tienda/fecha/hora (incluye SKUs si existe)
                 agg_kwargs = {
                     'pedidos': ('numero_pedido', 'nunique'),
                     'items':   ('items', 'sum'),
                 }
-                if tiene_sku:
-                    agg_kwargs['skus'] = (sku_col, 'nunique')
+                if tiene_sku_count:
+                    agg_kwargs['skus'] = (skus_count_col, 'sum')
+                elif tiene_sku_id:
+                    agg_kwargs['skus'] = (sku_id_col, 'nunique')
 
                 agrupado = (
                     df.groupby(['Tienda', 'fecha', 'hora'])
@@ -180,8 +194,10 @@ if archivos:
                             'pick_start': ('actual_inicio_picking', 'min'),
                             'pick_end': ('actual_fin_picking', 'max')
                         }
-                        if tiene_sku:
-                            agg_pick['skus_cnt'] = (sku_col, 'nunique')
+                        if tiene_sku_count:
+                            agg_pick['skus_cnt'] = (skus_count_col, 'sum')
+                        elif tiene_sku_id:
+                            agg_pick['skus_cnt'] = (sku_id_col, 'nunique')
                         pick_base = (
                             df_store.dropna(subset=['picker'])
                             .groupby(['numero_pedido', 'picker'], as_index=False)
@@ -310,8 +326,10 @@ if archivos:
 
                 # Para el forecast diario, calculamos desde la tabla original por día (distinct SKUs por día si aplica)
                 agg_daily = {'pedidos': ('numero_pedido', 'nunique'), 'items': ('items', 'sum')}
-                if tiene_sku:
-                    agg_daily['skus'] = (sku_col, 'nunique')
+                if tiene_sku_count:
+                    agg_daily['skus'] = (skus_count_col, 'sum')
+                elif tiene_sku_id:
+                    agg_daily['skus'] = (sku_id_col, 'nunique')
                 df_store_daily = (
                     df[df['Tienda'] == tienda_seleccionada]
                     .groupby('fecha')
